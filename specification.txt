@@ -1,0 +1,218 @@
+The Unix Stream Bus
+
+Antidesktop.org standards group. Standard Nr. 2
+DRAFT  29/4/2011
+
+0. References
+
+   [ADO RMI] http://antidesktop.org/std/ado-1-rsi.txt
+
+1. Motivation
+
+   System V IPC mechanisms offer no utils for situations
+   where multiple processes shall be connected.
+   Typical applications are system/session daemons which 
+   can be accessed by multiple other processes.
+   Those applications either have to provide their own
+   mechanism, or use dbus.
+   Ubus provides such functionality without the need for 
+   a system daemon. Its implementation is meant to be simple.
+   A einbus implementation can easily be written in pure shell
+   (if the shell supports sockets). 
+   Ubus establishes bidirectional multicast pipes. While 
+   they can be used for any purpose, this specification
+   also provides a standard protocol for RMI.
+
+2. Bus
+
+   A bus is a unix domain socket (AF_UNIX and SOCK_STREAM)
+   located in:
+          /var/einbus/application_name/
+   or
+          ~/.einbus/application_name/
+
+   depending on, if the owner is a system or session service.
+
+3. Services
+
+   Services are applications providing one or multiple buses.
+   They create the socket in the appropriate directory, listen
+   for incoming requests, and destroy the bus when they see fit.
+   Applications MUST delete the bus on exit, even when exiting
+   due to a signal.
+   The on disk layout of buses SHOULD reflect the logical object
+   layout of the application. The applications ipc directory
+   may contain sub-directories.
+
+4. Connections
+
+   A connection is a bidirectional pipe established with a bus.
+   An application may establish a connection with a bus, by
+   simply connecting to the file via connect (3).
+
+5. Communication types
+
+   5.1  Signals
+
+      A signal is a bus, where each connection receives 
+      a call when a specific event in the service happened.
+      Calls sent towards the service are either ignored,
+      or not synchronized.
+
+      Signals carry the file ending ".signal".
+
+   5.2  Methods
+
+      On a method connection, a call is sent to the
+      service, then the service responds with the 
+      return value. Each request MUST be followed by a 
+      response, in the same order they were sent.
+
+      Methods carry the file ending ".method".
+
+   5.3  Properties
+
+      Upon connection, the service immediately sends the 
+      current value to the client. A client may then send 
+      a new value. If the new value is accepted, it is 
+      again written to all connections. If it is rejected
+      an error (bell) COULD BE sent and the connection is 
+      terminated.
+
+      Properties carry the file ending ".property". 
+
+
+    5.4  Restful bus
+        
+      A client first sends a request,  then closes the write
+      channel. The service sends a response, and closes the
+      read channel. Both request and response may be
+      arbitrary binary code or even empty.
+      Error handling must be implemented at application
+      level.
+
+      Rest buses carry the file ending ".rest".
+
+
+6 Call Format
+
+   The format of signals, methods, and properties shall
+   be [ADO RMI] as defined by the antidesktop.org
+   standards group ADO STD Nr 1.
+
+7. Bus discovery and recovery
+
+   Applications may establish connections to services that 
+   are not started yet. Implementations SHOULD use inotify
+   or other available utils to monitor the path for creation
+   of the file.
+   If a socket is a zombie, implementations SHOULD attemp to
+   reconnect when the file is recreated. Implementations 
+   MUST handle unexpected disconnect gracefully. They SHOULD
+   provide an option for automatic reconnection.
+
+8. Security
+
+   Standard unix file permissions are used to prevent discoery
+   from unauthorized users. Access rights SHOULD NOT change
+   during operation.
+   Service implementations MUST be prepared to handle connections
+   from unauthorized users, as some Operating systems ignore
+   permissions on named pipes.
+   Client implementations MUST fail immediately to connect to a
+   socket without required permissions (as opposed to trying until
+   success )
+
+9. Scripting interface
+
+   Binaries are provided that help in scripting and remoting.
+
+   If a path to a bus does not begin with "/" or "./" , 
+   it is relative to ~/.ipc/.
+
+   9.1 "einbus"
+
+      The "einbus" binary allocates channels and maintains 
+      connections.
+      Messages from connections are written to stdout, 
+      prefixed with an identifier for the bus and the client.
+      They are rewritten as
+        command\tbus\tclient\tactualmessage\n, 
+      so that the ids are actually rmi arguments.
+
+      for the sake of readability, all \t are shown here 
+      as space again.
+
+      Commands via stdin:
+
+        b 4 app/fish.signal : create a new bus app/fish.signal 
+                              and identify it with "4"
+        u 4                 : destroy bus 4
+        w 4 123 ...         : message client 123 on bus 4
+        d 4 123             : disconnect client 123 on bus 4
+
+      On stdout you get:
+
+        b 4 1               : bus 4 created
+        b 4 0 123 dummy     : bus 4 not created because of
+                              error 123 "dummy"
+        c 4 123             : client 123 connected
+        r 4 123 ...         : message from client 123
+        d 4 123             : client 123 disconnected
+
+
+      The identifier is arbitrary text, and can be reused for 
+      a new client, after an old one disconnected.
+      A * can be used as client identifier to mean all 
+      connected clients, ie broadcast. A * in the bus identifier
+      has no meaning, and is part of the name.
+
+      Lines beginning with an unknown command, MUST be ignored.
+
+      Commandline arguments are interpreted as buses to open.
+      Ie, einbus foo/bla bar/baz  will open two channels and give 
+      them the idents 1 and 2.
+
+      Client connections to existing buses are also possible:
+
+        k 5 app/fish.signal : connect to bus app/fish.signal
+        i 5                 : disconnect 
+
+      On stdout:
+
+        k 5 1               : bus 4 connected
+        k 5 0 123 dummy     : bus 4 not connected because of
+                              error 123 "dummy"
+      
+      Read/writes are the same as with buses you created. The
+      client identifier must then always be empty.
+
+    9.3 "einbus-signal"
+    
+      Creates one bus given as command line argument.
+      Does not prefix any message. Stdin is broadcasted, 
+      Stdout shows all data from all clients, interleaved. 
+      Can be used for properties as well.
+
+    9.4 "einbus-connect"
+
+      connects to one bus given as command line argument.
+      stdin/stdout are wired to the bus.
+    
+      Identical to "socat STDIO UNIX-CONNECT:/path/to/bus", except 
+      that it is safe to assume its existence.
+
+10. Buses on remote machines
+
+   10.1 ssh
+
+     Applications can create and connect to buses on remote 
+     machines, via ssh. For that to work, the remote machine
+     must have the scripting interface installed.
+
+     An implementation can just call 
+       "ssh host einbus"
+   
+   10.2 tcp
+
+    TODO: inetd? whats with encryption? do we even care?
